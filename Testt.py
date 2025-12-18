@@ -13,7 +13,7 @@ MAGIC = importlib.util.MAGIC_NUMBER
 def is_pyc(path):
     try:
         with open(path, "rb") as f:
-            return f.read(4) == MAGIC
+            return f.read(len(MAGIC)) == MAGIC  # Safer length check
     except:
         return False
 
@@ -51,7 +51,7 @@ def detect_type(path):
 def load_code(path, ftype):
     if ftype == "PYC":
         with open(path, "rb") as f:
-            f.read(16)  # skip header
+            f.seek(16)  # Skip standard pyc header (more reliable than read(16))
             return marshal.loads(f.read())
 
     if ftype == "MARSHAL":
@@ -60,7 +60,8 @@ def load_code(path, ftype):
 
     if ftype == "PY":
         with open(path, "r", encoding="utf-8") as f:
-            return compile(f.read(), path, "exec")
+            source = f.read()
+        return compile(source, path, "exec")
 
     raise ValueError("Unsupported file")
 
@@ -79,7 +80,7 @@ def disassemble_code(code):
 
 def py_to_pyc(path):
     out = path + "c"
-    py_compile.compile(path, cfile=out)
+    py_compile.compile(path, cfile=out, doraise=True)
     print(f"[+] PY → PYC saved as: {out}")
 
 
@@ -87,7 +88,8 @@ def marshal_to_pyc(path, code):
     out = path + ".pyc"
     with open(out, "wb") as f:
         f.write(MAGIC)
-        f.write(struct.pack("I", 0))
+        f.write(struct.pack("<I", 0))  # Timestamp 0 (little-endian, standard)
+        f.write(struct.pack("<I", 0))  # Size 0 (optional in newer Python)
         f.write(marshal.dumps(code))
     print(f"[+] MARSHAL → PYC saved as: {out}")
 
@@ -104,14 +106,27 @@ def menu():
     print("6) Exit")
 
 
+def normalize_path(user_input):
+    """Helper to make Android paths easier: auto-add /sdcard/ if input looks relative and starts with 'sdcard/'"""
+    path = user_input.strip()
+    if path.lower().startswith("sdcard/"):
+        path = "/" + path
+    return os.path.abspath(path)  # Expand and normalize
+
+
 def main():
     print("=== PYTHON AUTO FILE TOOL ===")
+    print("(Tip: Use full paths like /sdcard/filename.py or just sdcard/filename.py)")
 
     while True:
-        path = input("\nEnter file path: ").strip()
+        user_input = input("\nEnter file path: ").strip()
+        if not user_input:
+            continue
+
+        path = normalize_path(user_input)
 
         if not os.path.isfile(path):
-            print("[-] File not found")
+            print("[-] File not found. Try with /sdcard/ prefix.")
             continue
 
         while True:
@@ -137,8 +152,10 @@ def main():
                     py_to_pyc(path)
                 elif ftype == "MARSHAL":
                     marshal_to_pyc(path, code)
-                else:
+                elif ftype == "PYC":
                     print("[-] Already a PYC file")
+                else:
+                    print("[-] Conversion not supported")
 
             elif choice == "4":
                 disassemble_code(code)
